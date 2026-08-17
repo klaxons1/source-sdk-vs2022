@@ -41,20 +41,38 @@ jobs:
           reg add "HKLM\SOFTWARE\Classes\VisualStudio.Launcher.sln\Shell\Open\Command" /ve /t REG_SZ /d "\"C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\devenv.exe\" \"%%1\"" /f
           reg add "HKLM\SOFTWARE\Wow6432Node\Microsoft\VisualStudio\10.0\Projects\{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}" /v "DefaultProjectExtension" /t REG_SZ /d "vcxproj" /f
 
-      # 5. Исправление ошибки C2084 (_wcsdup already has a body) в memoverride.cpp
+      # 5. Гарантированное исправление ошибки C2084 (_wcsdup) для любых переносов строк
       - name: Patch memoverride.cpp for VS2022
         shell: powershell
         run: |
           $filePath = "sp\src\public\tier0\memoverride.cpp"
           if (Test-Path $filePath) {
-              $content = Get-Content $filePath -Raw
-              $badCode = "wchar_t *__cdecl _wcsdup( const wchar_t *strSource )`r`n{`r`n`treturn MemAlloc_wcsdup( strSource, __FILE__, __LINE__ );`r`n}"
-              $fixedCode = "#if _MSC_VER < 1900`r`nwchar_t *__cdecl _wcsdup( const wchar_t *strSource )`r`n{`r`n`treturn MemAlloc_wcsdup( strSource, __FILE__, __LINE__ );`r`n}`r`n#endif"
-              if ($content.Contains("_wcsdup")) {
-                  $content = $content -replace [regex]::Escape($badCode), $fixedCode
-                  Set-Content -Path $filePath -Value $content -NoNewline
-                  Write-Host "Патч memoverride.cpp успешно применен."
+              $lines = Get-Content $filePath
+              
+              # Ищем индекс строки, где объявляется wchar_t *__cdecl _wcsdup
+              $targetIndex = -1
+              for ($i = 0; $i -lt $lines.Count; $i++) {
+                  if ($lines[$i] -match "wchar_t\s+\*__cdecl\s+_wcsdup") {
+                      $targetIndex = $i
+                      break
+                  }
               }
+              
+              if ($targetIndex -ne -1) {
+                  Write-Host "Найдено объявление _wcsdup на строке $($targetIndex + 1). Оборачиваем в директивы препроцессора..."
+                  
+                  # Оборачиваем саму функцию и её тело (следующие 3 строки) в проверку версии MSVC
+                  $lines[$targetIndex] = "#if _MSC_VER < 1930`n" + $lines[$targetIndex]
+                  $lines[$targetIndex + 3] = $lines[$targetIndex + 3] + "`n#endif"
+                  
+                  Set-Content -Path $filePath -Value $lines
+                  Write-Host "Файл успешно модифицирован!"
+              } else {
+                  Write-Warning "Не удалось найти сигнатуру _wcsdup в файле."
+              }
+          } else {
+              Write-Error "Файл memoverride.cpp отсутствует!"
+              exit 1
           }
 
       # 6. Генерация .sln файлов через VPC
