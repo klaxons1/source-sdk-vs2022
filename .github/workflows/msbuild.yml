@@ -3,7 +3,7 @@ name: Build Source SDK 2013 SP (Release)
 on:
   push:
     branches:
-      - master # Сборка запускается при пуше в master (или укажите вашу ветку)
+      - master
   pull_request:
     branches:
       - master
@@ -11,38 +11,42 @@ on:
 jobs:
   build:
     name: Build SP Client and Server DLLs
-    runs-on: windows-2022 # Используем окружение с Visual Studio 2022
+    runs-on: windows-2022
 
     steps:
       # 1. Клонирование репозитория
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Настройка MSBuild в PATH окружения
+      # 2. Настройка MSBuild
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      # 3. Генерация .sln и .vcxproj файлов через VPC
+      # 3. Генерация .sln файлов через VPC
       - name: Generate Visual Studio Projects
         shell: cmd
         run: |
           cd sp\src
-          :: Запуск батника для генерации проекта everything.sln
           call createallprojects.bat
 
-      # 4. Компиляция решения в конфигурации Release
+      # 4. Компиляция решения в конфигурации Release (Platform: Win32)
       - name: Build Solution (Release)
         shell: cmd
         run: |
           cd sp\src
-          :: Компилируем только client и server проекты (или everything.sln целиком)
           msbuild everything.sln /p:Configuration=Release /p:Platform=Win32 /m
 
-      # 5. Сохранение скомпилированных бинарников (client.dll и server.dll) в артефакты
+      # 5. Копирование готовых DLL в одну общую папку
+      - name: Collect DLLs into one folder
+        shell: cmd
+        run: |
+          mkdir build_output
+          xcopy "sp\src\game\client\Release\client.dll" "build_output\" /Y
+          xcopy "sp\src\game\server\Release\server.dll" "build_output\" /Y
+
+      # 6. Сохранение папки с DLL в артефакты сборки GitHub
       - name: Upload Artifacts
-        uses: actions/artifacts-upload@v4
+        uses: actions/upload-artifact@v4
         with:
           name: source-sdk-sp-release-binaries
-          path: |
-            sp/src/game/client/Release/*.dll
-            sp/src/game/server/Release/*.dll
+          path: build_output/
