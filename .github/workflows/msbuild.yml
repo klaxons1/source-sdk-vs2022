@@ -22,21 +22,28 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      # 3. Генерация .sln файлов через VPC
+      # 3. Решение ошибки VPC (Добавление RegKey для vcxproj)
+      - name: Fix VPC Registry Error
+        shell: cmd
+        run: |
+          reg add "HKLM\SOFTWARE\Classes\VisualStudio.Launcher.sln\Shell\Open\Command" /ve /t REG_SZ /d "\"C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\devenv.exe\" \"%%1\"" /f
+          reg add "HKLM\SOFTWARE\Wow6432Node\Microsoft\VisualStudio\10.0\Projects\{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}" /v "DefaultProjectExtension" /t REG_SZ /d "vcxproj" /f
+
+      # 4. Генерация .sln файлов через VPC
       - name: Generate Visual Studio Projects
         shell: cmd
         run: |
           cd sp\src
           call createallprojects.bat
 
-      # 4. Компиляция решения в конфигурации Release (Platform: Win32)
+      # 5. Компиляция решения в конфигурации Release (Platform: Win32)
       - name: Build Solution (Release)
         shell: cmd
         run: |
           cd sp\src
           msbuild everything.sln /p:Configuration=Release /p:Platform=Win32 /m
 
-      # 5. Копирование готовых DLL в одну общую папку
+      # 6. Копирование готовых DLL в одну общую папку
       - name: Collect DLLs into one folder
         shell: cmd
         run: |
@@ -44,7 +51,7 @@ jobs:
           xcopy "sp\src\game\client\Release\client.dll" "build_output\" /Y
           xcopy "sp\src\game\server\Release\server.dll" "build_output\" /Y
 
-      # 6. Сохранение папки с DLL в артефакты сборки GitHub
+      # 7. Сохранение папки с DLL в артефакты сборки GitHub
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
