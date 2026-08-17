@@ -22,47 +22,71 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      # 3. Решение ошибки VPC (Добавление RegKey для vcxproj)
+      # 3. Кэширование промежуточных файлов сборки (.obj, .pch)
+      - name: Cache MSBuild outputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            sp/src/game/server/Release
+            sp/src/game/client/Release
+            sp/src/intermediate
+          key: ${{ runner.os }}-msbuild-${{ hashFiles('**/*.vpc', '**/*.vcxproj') }}
+          restore-keys: |
+            ${{ runner.os }}-msbuild-
+
+      # 4. Решение ошибки VPC (Добавление RegKey для vcxproj)
       - name: Fix VPC Registry Error
         shell: cmd
         run: |
           reg add "HKLM\SOFTWARE\Classes\VisualStudio.Launcher.sln\Shell\Open\Command" /ve /t REG_SZ /d "\"C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\devenv.exe\" \"%%1\"" /f
           reg add "HKLM\SOFTWARE\Wow6432Node\Microsoft\VisualStudio\10.0\Projects\{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}" /v "DefaultProjectExtension" /t REG_SZ /d "vcxproj" /f
 
-      # 4. Генерация .sln файлов через VPC
+      # 5. Исправление ошибки C2084 (_wcsdup already has a body) в memoverride.cpp
+      - name: Patch memoverride.cpp for VS2022
+        shell: powershell
+        run: |
+          $filePath = "sp\src\public\tier0\memoverride.cpp"
+          if (Test-Path $filePath) {
+              $content = Get-Content $filePath -Raw
+              $badCode = "wchar_t *__cdecl _wcsdup( const wchar_t *strSource )`r`n{`r`n`treturn MemAlloc_wcsdup( strSource, __FILE__, __LINE__ );`r`n}"
+              $fixedCode = "#if _MSC_VER < 1900`r`nwchar_t *__cdecl _wcsdup( const wchar_t *strSource )`r`n{`r`n`treturn MemAlloc_wcsdup( strSource, __FILE__, __LINE__ );`r`n}`r`n#endif"
+              if ($content.Contains("_wcsdup")) {
+                  $content = $content -replace [regex]::Escape($badCode), $fixedCode
+                  Set-Content -Path $filePath -Value $content -NoNewline
+                  Write-Host "Патч memoverride.cpp успешно применен."
+              }
+          }
+
+      # 6. Генерация .sln файлов через VPC
       - name: Generate Visual Studio Projects
         shell: cmd
         run: |
           cd sp\src
           call createallprojects.bat
 
-      # 5. Компиляция конкретно проектов Client и Server (таргет на Episodic/HL2)
+      # 7. Компиляция конкретно проектов Client и Server (Win32 Release)
       - name: Build Projects (Release Win32)
         shell: cmd
         run: |
           cd sp\src
-          :: Собираем сначала серверную часть
           msbuild game\server\server_episodic.vcxproj /p:Configuration=Release /p:Platform=Win32 /m
-          :: Собираем клиентскую часть
           msbuild game\client\client_episodic.vcxproj /p:Configuration=Release /p:Platform=Win32 /m
 
-      # 6. Сбор готовых DLL через PowerShell с поиском по маске (исключает ошибку путей)
+      # 8. Сбор готовых DLL через PowerShell с поиском по маске
       - name: Collect DLLs into one folder
         shell: powershell
         run: |
           New-Item -ItemType Directory -Force -Path build_output
           
-          # Ищем скомпилированные DLL во всех подпапках Release внутри game/
           Get-ChildItem -Path "sp/src/game" -Filter "client.dll" -Recurse | Copy-Item -Destination "build_output\" -Force
           Get-ChildItem -Path "sp/src/game" -Filter "server.dll" -Recurse | Copy-Item -Destination "build_output\" -Force
           
-          # Проверяем, появились ли файлы, чтобы не падать на следующем шаге
           if (-not (Test-Path "build_output\client.dll") -or -not (Test-Path "build_output\server.dll")) {
             Write-Error "Скомпилированные DLL не найдены в выходных папках!"
             exit 1
           }
 
-      # 7. Сохранение папки с DLL в артефакты сборки GitHub
+      # 9. Сохранение папки с DLL в артефакты сборки GitHub
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
