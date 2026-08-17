@@ -36,20 +36,31 @@ jobs:
           cd sp\src
           call createallprojects.bat
 
-      # 5. Компиляция решения в конфигурации Release (Platform: Win32)
-      - name: Build Solution (Release)
+      # 5. Компиляция конкретно проектов Client и Server (таргет на Episodic/HL2)
+      - name: Build Projects (Release Win32)
         shell: cmd
         run: |
           cd sp\src
-          msbuild everything.sln /p:Configuration=Release /p:Platform=Win32 /m
+          :: Собираем сначала серверную часть
+          msbuild game\server\server_episodic.vcxproj /p:Configuration=Release /p:Platform=Win32 /m
+          :: Собираем клиентскую часть
+          msbuild game\client\client_episodic.vcxproj /p:Configuration=Release /p:Platform=Win32 /m
 
-      # 6. Копирование готовых DLL в одну общую папку
+      # 6. Сбор готовых DLL через PowerShell с поиском по маске (исключает ошибку путей)
       - name: Collect DLLs into one folder
-        shell: cmd
+        shell: powershell
         run: |
-          mkdir build_output
-          xcopy "sp\src\game\client\Release\client.dll" "build_output\" /Y
-          xcopy "sp\src\game\server\Release\server.dll" "build_output\" /Y
+          New-Item -ItemType Directory -Force -Path build_output
+          
+          # Ищем скомпилированные DLL во всех подпапках Release внутри game/
+          Get-ChildItem -Path "sp/src/game" -Filter "client.dll" -Recurse | Copy-Item -Destination "build_output\" -Force
+          Get-ChildItem -Path "sp/src/game" -Filter "server.dll" -Recurse | Copy-Item -Destination "build_output\" -Force
+          
+          # Проверяем, появились ли файлы, чтобы не падать на следующем шаге
+          if (-not (Test-Path "build_output\client.dll") -or -not (Test-Path "build_output\server.dll")) {
+            Write-Error "Скомпилированные DLL не найдены в выходных папках!"
+            exit 1
+          }
 
       # 7. Сохранение папки с DLL в артефакты сборки GitHub
       - name: Upload Artifacts
