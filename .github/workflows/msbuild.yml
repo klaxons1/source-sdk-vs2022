@@ -22,7 +22,7 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      # 3. Кэширование промежуточных файлов сборки (.obj, .pch)
+      # 3. Кэширование (Очищено от конфликтов)
       - name: Cache MSBuild outputs
         uses: actions/cache@v4
         with:
@@ -41,56 +41,23 @@ jobs:
           reg add "HKLM\SOFTWARE\Classes\VisualStudio.Launcher.sln\Shell\Open\Command" /ve /t REG_SZ /d "\"C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\devenv.exe\" \"%%1\"" /f
           reg add "HKLM\SOFTWARE\Wow6432Node\Microsoft\VisualStudio\10.0\Projects\{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}" /v "DefaultProjectExtension" /t REG_SZ /d "vcxproj" /f
 
-      # 5. Гарантированное исправление ошибки C2084 (_wcsdup) для любых переносов строк
-      - name: Patch memoverride.cpp for VS2022
-        shell: powershell
-        run: |
-          $filePath = "sp\src\public\tier0\memoverride.cpp"
-          if (Test-Path $filePath) {
-              $lines = Get-Content $filePath
-              
-              # Ищем индекс строки, где объявляется wchar_t *__cdecl _wcsdup
-              $targetIndex = -1
-              for ($i = 0; $i -lt $lines.Count; $i++) {
-                  if ($lines[$i] -match "wchar_t\s+\*__cdecl\s+_wcsdup") {
-                      $targetIndex = $i
-                      break
-                  }
-              }
-              
-              if ($targetIndex -ne -1) {
-                  Write-Host "Найдено объявление _wcsdup на строке $($targetIndex + 1). Оборачиваем в директивы препроцессора..."
-                  
-                  # Оборачиваем саму функцию и её тело (следующие 3 строки) в проверку версии MSVC
-                  $lines[$targetIndex] = "#if _MSC_VER < 1930`n" + $lines[$targetIndex]
-                  $lines[$targetIndex + 3] = $lines[$targetIndex + 3] + "`n#endif"
-                  
-                  Set-Content -Path $filePath -Value $lines
-                  Write-Host "Файл успешно модифицирован!"
-              } else {
-                  Write-Warning "Не удалось найти сигнатуру _wcsdup в файле."
-              }
-          } else {
-              Write-Error "Файл memoverride.cpp отсутствует!"
-              exit 1
-          }
-
-      # 6. Генерация .sln файлов через VPC
+      # 5. Генерация .sln файлов через VPC
       - name: Generate Visual Studio Projects
         shell: cmd
         run: |
           cd sp\src
           call createallprojects.bat
 
-      # 7. Компиляция конкретно проектов Client и Server (Win32 Release)
+      # 6. Компиляция с принудительным переопределением макросов во избежание C2084
       - name: Build Projects (Release Win32)
         shell: cmd
         run: |
           cd sp\src
-          msbuild game\server\server_episodic.vcxproj /p:Configuration=Release /p:Platform=Win32 /m
-          msbuild game\client\client_episodic.vcxproj /p:Configuration=Release /p:Platform=Win32 /m
+          :: Добавляем /p:ForceImportBeforeCppTargets, который заставит компилятор применить макрос и проигнорировать старый код _wcsdup во всех проектах
+          msbuild game\server\server_episodic.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:CustomBeforeMicrosoftCommonTargets="$(ProjectDir)\..\..\devtools\scripts\empty.targets" /p:ForceImportBeforeCppTargets="" /p:CL_MPCount=4 /m /p:DefineConstants="YVALVE;WIN32;_WIN32;_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_WARNINGS;_WCSDUP_DEFINED"
+          msbuild game\client\client_episodic.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:CustomBeforeMicrosoftCommonTargets="$(ProjectDir)\..\..\devtools\scripts\empty.targets" /p:ForceImportBeforeCppTargets="" /p:CL_MPCount=4 /m /p:DefineConstants="YVALVE;WIN32;_WIN32;_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_WARNINGS;_WCSDUP_DEFINED"
 
-      # 8. Сбор готовых DLL через PowerShell с поиском по маске
+      # 7. Сбор готовых DLL через PowerShell с поиском по маске
       - name: Collect DLLs into one folder
         shell: powershell
         run: |
@@ -104,7 +71,7 @@ jobs:
             exit 1
           }
 
-      # 9. Сохранение папки с DLL в артефакты сборки GitHub
+      # 8. Сохранение папки с DLL в артефакты сборки GitHub
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
