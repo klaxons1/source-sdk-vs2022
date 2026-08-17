@@ -12,9 +12,6 @@ jobs:
   build:
     name: Build SP Client and Server DLLs
     runs-on: windows-2022
-    env:
-      # Fix duplicate _wcsdup and suppress warnings
-      CL: /D_WCSDUP_DEFINED /D_CRT_SECURE_NO_WARNINGS /D_CRT_NONSTDC_NO_WARNINGS
 
     steps:
       # 1. Checkout repository
@@ -25,7 +22,21 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      # 3. Cache MSBuild outputs
+      # 3. Patch memoverride.cpp to fix duplicate _wcsdup
+      - name: Patch memoverride.cpp
+        shell: powershell
+        run: |
+          $file = "sp\src\public\tier0\memoverride.cpp"
+          $content = Get-Content $file -Raw
+          if ($content -notmatch '#define _WCSDUP_DEFINED') {
+            $content = "#define _WCSDUP_DEFINED`r`n" + $content
+            Set-Content $file $content -NoNewline
+            Write-Host "Patched memoverride.cpp"
+          } else {
+            Write-Host "memoverride.cpp already patched"
+          }
+
+      # 4. Cache MSBuild outputs
       - name: Cache MSBuild outputs
         uses: actions/cache@v4
         with:
@@ -33,25 +44,25 @@ jobs:
             sp/src/game/server/Release
             sp/src/game/client/Release
             sp/src/intermediate
-          key: ${{ runner.os }}-msbuild-${{ hashFiles('**/*.vpc', '**/*.vcxproj') }}
+          key: ${{ runner.os }}-msbuild-${{ hashFiles('**/*.vpc', '**/*.vcxproj', '**/memoverride.cpp') }}
           restore-keys: |
             ${{ runner.os }}-msbuild-
 
-      # 4. Fix VPC Registry Error
+      # 5. Fix VPC Registry Error
       - name: Fix VPC Registry Error
         shell: cmd
         run: |
           reg add "HKLM\SOFTWARE\Classes\VisualStudio.Launcher.sln\Shell\Open\Command" /ve /t REG_SZ /d "\"C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\devenv.exe\" \"%%1\"" /f
           reg add "HKLM\SOFTWARE\Wow6432Node\Microsoft\VisualStudio\10.0\Projects\{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}" /v "DefaultProjectExtension" /t REG_SZ /d "vcxproj" /f
 
-      # 5. Generate Visual Studio Projects
+      # 6. Generate Visual Studio Projects
       - name: Generate Visual Studio Projects
         shell: cmd
         run: |
           cd sp\src
           call createallprojects.bat
 
-      # 6. Build Projects (Release Win32)
+      # 7. Build Projects (Release Win32)
       - name: Build Projects (Release Win32)
         shell: cmd
         run: |
@@ -59,7 +70,7 @@ jobs:
           msbuild game\server\server_episodic.vcxproj /p:Configuration=Release /p:Platform=Win32 /m
           msbuild game\client\client_episodic.vcxproj /p:Configuration=Release /p:Platform=Win32 /m
 
-      # 7. Collect DLLs
+      # 8. Collect DLLs
       - name: Collect DLLs
         shell: powershell
         run: |
@@ -73,7 +84,7 @@ jobs:
             exit 1
           }
 
-      # 8. Upload Artifacts
+      # 9. Upload Artifacts
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
